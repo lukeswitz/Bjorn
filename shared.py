@@ -24,20 +24,138 @@ import subprocess
 from PIL import Image, ImageFont 
 from logger import Logger
 from epd_helper import EPDHelper
+import uuid
 
 
 logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object 
+
+class WifiManager:
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+        self.logger = Logger(name="WifiManager", level=logging.DEBUG)
+        self.last_connect_attempt = 0
+        self.scan_in_progress = False  # Prevent redundant scans
+
+    def scan_networks(self):
+        try:
+            result = subprocess.run(['sudo', 'iwlist', 'wlan0', 'scan'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return self.parse_scan_output(result.stdout)
+            return []
+        except Exception as e:
+            self.logger.error(f"Error scanning networks: {e}")
+            return []
+
+    def parse_scan_output(self, output):
+        networks = []
+        current_network = {}
+        for line in output.split('\n'):
+            line = line.strip()
+            if 'ESSID:' in line:
+                ssid = line.split(':')[1].strip('"')
+                if current_network:
+                    networks.append(current_network)
+                current_network = {'ssid': ssid, 'encrypted': True}
+            elif 'Encryption key:off' in line:
+                current_network['encrypted'] = False
+        if current_network:
+            networks.append(current_network)
+        return networks
+
+    def is_connected(self):
+        try:
+            result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True)
+            return bool(result.stdout.strip())
+        except Exception as e:
+            self.logger.error(f"Error checking connection status: {e}")
+            return False
+
+    def disconnect_current_network(self):
+        try:
+            current_network = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True).stdout.strip()
+            self.logger.debug(f"Currently connected to: {current_network}")
+            if current_network:  # Disconnect only if currently connected to a network
+                subprocess.run(['sudo', 'nmcli', 'device', 'disconnect', 'wlan0'])
+                self.logger.info("Disconnected from the current network.")
+        except Exception as e:
+            self.logger.error(f"Failed to disconnect from the current network: {e}")
+
+    def try_auto_connect(self):
+        """Attempt to connect to open networks."""
+        if self.scan_in_progress:  # Prevent concurrent scans
+            self.logger.debug("Scan already in progress. Skipping...")
+            return
+
+        current_time = time.time()
+        if current_time - self.last_connect_attempt < self.shared_data.auto_connect_interval:
+            #self.logger.debug(f"Skipping scan; interval not yet elapsed. Last attempt at {self.last_connect_attempt:.2f}")
+            return
+
+        self.scan_in_progress = True  # Set flag before scanning
+        self.last_connect_attempt = current_time
+        self.logger.info(f"Scanning networks at {time.strftime('%Y-%m-%d %H:%M:%S')}.")
+
+        try:
+            networks = self.scan_networks()
+            open_networks = [net for net in networks if not net['encrypted']]
+
+            if open_networks:
+                self.logger.info(f"Scanned {len(networks)} networks. {len(open_networks)} open networks found.")
+                for network in open_networks:
+                    if self.connect_to_network(network['ssid']):
+                        break
+            else:
+                self.logger.debug(f"Scanned {len(networks)} networks. No open networks found.")
+        except Exception as e:
+            self.logger.error(f"Error during network scan: {e}")
+        finally:
+            self.scan_in_progress = False  # Reset flag after scanning
+
+
+    def connect_to_network(self, ssid):
+        config_path = '/etc/NetworkManager/system-connections/preconfigured.nmconnection'
+        try:
+            with open(config_path, 'w') as f:
+                f.write(f"""
+[connection]
+id=preconfigured
+uuid={uuid.uuid4()}
+type=wifi
+autoconnect=true
+
+[wifi]
+ssid={ssid}
+mode=infrastructure
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+""")
+            subprocess.run(['sudo', 'chmod', '600', config_path])
+            subprocess.run(['sudo', 'nmcli', 'connection', 'reload'])
+            subprocess.run(['sudo', 'nmcli', 'connection', 'up', 'preconfigured'])
+            self.logger.info(f"Connected to open network: {ssid}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to connect to {ssid}: {e}")
+            return False
 
 class SharedData:
     """Shared data between the different modules."""
     def __init__(self):
         self.initialize_paths() # Initialize the paths used by the application
-        self.status_list = [] 
+        self.status_list = []
+        self.network_ready = False  # Default to False at initialization
         self.last_comment_time = time.time() # Last time a comment was displayed
         self.default_config = self.get_default_config() # Default configuration of the application  
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
         self.load_config()
+        
+        # For auto connect mode
+        self.wifi_manager = WifiManager(self)
 
         # Update MAC blacklist without immediate save
         self.update_mac_blacklist()
@@ -127,6 +245,8 @@ class SharedData:
             "log_warning": True,
             "log_error": True,
             "log_critical": True,
+            "auto_connect_open": False,
+            "auto_connect_interval": 60,
             
             "startup_delay": 10,
             "web_delay": 2,

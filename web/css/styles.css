@@ -364,6 +364,18 @@ input:checked + .slider:before {
     z-index: 100;
 }
 
+.wifi-settings {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 10px;
+    gap: 5px;
+}
+
+.wifi-settings label {
+    color: #fff;
+    font-size: 14px;
+}
+
 #bjorn_home {
     border-radius: 11% !important;
 }

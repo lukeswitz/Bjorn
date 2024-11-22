@@ -14,14 +14,14 @@ function generateConfigForm(config) {
             rightColumn.innerHTML += `<div class="section-title"><b>${value}</b></div>`;
         } else if (typeof value === "boolean") {
             const checked = value ? "checked" : "";
+            const label = key === "auto_connect_open" ? "Auto-connect to open WiFi networks" : key;
             leftColumn.innerHTML += `
-    
                 <div class="label-switch">
                     <label class="switch">
                         <input type="checkbox" id="${key}" name="${key}" ${checked}>
                         <span class="slider round"></span>
                     </label>
-                    <label for="${key}">${key}</label>
+                    <label for="${key}">${label}</label>
                 </div>
             `;
         } else if (Array.isArray(value)) {

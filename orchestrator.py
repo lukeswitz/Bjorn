@@ -31,6 +31,7 @@ class Orchestrator:
     def __init__(self):
         """Initialise the orchestrator"""
         self.shared_data = shared_data
+        self.shared_data.network_ready = False
         self.actions = []  # List of actions to be executed
         self.standalone_actions = []  # List of standalone actions to be executed
         self.failed_scans_count = 0  # Count the number of failed scans
@@ -40,6 +41,7 @@ class Orchestrator:
         actions_loaded = [action.__class__.__name__ for action in self.actions + self.standalone_actions]  # Get the names of the loaded actions
         logger.info(f"Actions loaded: {actions_loaded}")
         self.semaphore = threading.Semaphore(10)  # Limit the number of active threads to 10
+        self.last_auto_connect_attempt = 0
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -250,6 +252,15 @@ class Orchestrator:
         self.shared_data.bjornstatustext2 = "First scan..."
         self.network_scanner.scan()
         self.shared_data.bjornstatustext2 = ""
+        self.shared_data.network_ready = True  # Mark network setup complete
+
+        # Check and attempt auto-connect if enabled
+        if self.shared_data.auto_connect_open and self.shared_data.network_ready:
+            now = time.time()
+            if now - self.shared_data.wifi_manager.last_connect_attempt >= self.shared_data.auto_connect_interval:
+                logger.info("Attempting to auto-connect to open networks...")
+                self.shared_data.wifi_manager.try_auto_connect()
+
         while not self.shared_data.orchestrator_should_exit:
             current_data = self.shared_data.read_data()
             any_action_executed = False
@@ -298,14 +309,23 @@ class Orchestrator:
                 self.shared_data.bjornorch_status = "IDLE"
                 self.shared_data.bjornstatustext2 = ""
                 logger.info("No available targets. Running network scan...")
+
+                # Always try to find and connect to open networks during idle if enabled
+                if self.shared_data.auto_connect_open and self.shared_data.network_ready:
+                    now = time.time()  # Use `now` for time in seconds
+                    if now - self.shared_data.wifi_manager.last_connect_attempt >= self.shared_data.auto_connect_interval:
+                        self.shared_data.wifi_manager.try_auto_connect()
+
                 if self.network_scanner:
                     self.shared_data.bjornorch_status = "NetworkScanner"
                     self.network_scanner.scan()
-                     # Relire les données mises à jour après le scan
+
+                    # Reload the updated data after the scan
                     current_data = self.shared_data.read_data()
                     any_action_executed = self.process_alive_ips(current_data)
+
                     if self.shared_data.scan_vuln_running:
-                        current_time = datetime.now()
+                        current_time = datetime.now()  # Use `current_time` for datetime comparisons
                         if current_time >= self.last_vuln_scan_time + timedelta(seconds=self.shared_data.scan_vuln_interval):
                             try:
                                 logger.info("Starting vulnerability scans...")
