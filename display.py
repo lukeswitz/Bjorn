@@ -33,6 +33,7 @@ class Display:
     def __init__(self, shared_data):
         """Initialize the display and start the main image and shared data update threads."""
         self.shared_data = shared_data
+        self.wifi_manager = shared_data.wifi_manager
         self.config = self.shared_data.config
         self.shared_data.bjornstatustext2 = "Awakening..."
         self.commentaire_ia = Commentaireia()
@@ -280,6 +281,12 @@ class Display:
         self.manual_mode_txt = ""
         while not self.shared_data.display_should_exit:
             try:
+                # Delay auto-connect until network setup is complete
+                if self.shared_data.auto_connect_open and self.shared_data.network_ready:
+                    self.wifi_manager.try_auto_connect()
+                    if self.shared_data.auto_connect_open:
+                        self.wifi_manager.try_auto_connect()
+                    
                 self.epd_helper.init_partial_update()
                 self.display_comment(self.shared_data.bjornorch_status)
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
